@@ -49,7 +49,7 @@ aapt2:        build-tools/36.0.0/aapt2（arm64，经 aapt2FromMavenOverride 指�
 | JDK | 17+（实测 OpenJDK 21 arm64） | `JAVA_HOME` 指向 arm64 JDK |
 | Android SDK | `platforms;android-37.0` | compileSdk/targetSdk = 37 |
 | build-tools | 34/35/36 的 arm64 替换版 | 见第 2 节；官方 x86_64 版不可用 |
-| NDK | 29.0.14206865（arm64） | 见第 3 节 |
+| NDK | 29.0.14206865（arm64） | 见 2.4 节（含目录名矫正） |
 | CMake | 3.22.1（SDK 组件） | `llama-cpp` 显式要求 |
 | Node.js | 18+（实测 v24） | 用于 web-ui 构建 |
 | pnpm | 10.x（实测 10.34.5） | web-ui 依赖安装与打包（**不用 bun**，原因见坑 4） |
@@ -117,23 +117,60 @@ $ANDROID_HOME/build-tools/36.0.0/aapt2 dump resources \
 从 [termux-ndk](https://github.com/Nicoleweimeow/termux-ndk) 获取 aarch64 版 NDK，
 放入 `$ANDROID_HOME/ndk/29.0.14206865`。
 
-> ⚠️ **重要：这个 NDK 的目录结构有"陷阱"**
+> ⚠️ **注意：原始包的目录名错位问题，以及推荐的矫正办法**
 >
+> termux-ndk 原始包中，aarch64 工具链放在 `linux-x86_64` 目录名下
+> （`linux-aarch64` 是指向它的符号链接）——名字与实际内容不符，容易误导排查。
+>
+> **原因**：NDK 工具链脚本（`build/cmake/android.toolchain.cmake`）在 Linux 主机上
+> 把 host tag 固定为 `linux-x86_64`；本环境是 proot Ubuntu，`CMAKE_HOST_SYSTEM_NAME`
+> 为 "Linux"（而非 "Android"），所以脚本会按 `linux-x86_64` 目录找工具链。
+>
+> **推荐矫正**（目录名与内容对齐，本验证环境已执行；重装 NDK 包后需重新矫正）：
+>
+> ① 备份后修补两个 CMake 文件（`build/cmake/android.toolchain.cmake`、
+> `build/cmake/android-legacy.toolchain.cmake`），将：
+> ```cmake
+> elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL Linux)
+>   set(ANDROID_HOST_TAG linux-x86_64)
 > ```
-> ndk/29.0.14206865/toolchains/llvm/prebuilt/
-> ├── linux-aarch64 -> linux-x86_64   （符号链接）
-> └── linux-x86_64/                    （1.7 GB，内含真正的 arm64 工具链！）
+> 改为：
+> ```cmake
+> elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL Linux)
+>   if(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+>     set(ANDROID_HOST_TAG linux-aarch64)
+>   else()
+>     set(ANDROID_HOST_TAG linux-x86_64)
+>   endif()
 > ```
 >
-> termux-ndk 方案把 **aarch64 工具链放在了 `linux-x86_64` 目录名下**
-> （兼容 NDK 内部按传统路径查找的逻辑），并补了一个 `linux-aarch64` 符号链接。
-> **`linux-x86_64` 目录不能删！它才是工具链本体。**
+> ② 修补 `build/tools/make_standalone_toolchain.py` 的 `get_host_tag_or_die()`：
+> ```python
+> if sys.platform.startswith("linux"):
+>     if os.uname().machine in ("aarch64", "arm64"):
+>         return "linux-aarch64"
+>     return "linux-x86_64"
+> ```
 >
-> 验证方法：
+> ③ 重命名目录，并补一个兼容符号链接：
 > ```bash
-> od -An -t x1 -j 18 -N 2 .../prebuilt/linux-x86_64/bin/clang   # 应输出 b700（arm64）
-> .../prebuilt/linux-aarch64/bin/clang --version                 # 应能正常运行
+> cd $ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt
+> rm linux-aarch64 && mv linux-x86_64 linux-aarch64
+> ln -s linux-aarch64 linux-x86_64   # 兼容别名：环境内固化的旧路径引用依赖它
 > ```
+> 说明：proot 的 `--link2symlink` 机制会在 `sysroot` 的库文件上生成"模拟硬链接"
+> （形如 `.l2s.*` 的符号链接），其中固化了 `linux-x86_64` 的绝对路径（如
+> `libc++_shared.so`）。保留 `linux-x86_64 -> linux-aarch64` 兼容别名后，
+> 旧路径可继续解析，而工具链本体已归位到正确命名的 `linux-aarch64`。
+> **兼容别名不可删**（否则链接 `-lc++_shared` 会失败）。
+>
+> 矫正后自检：`.../prebuilt/linux-aarch64/bin/clang --version` 可运行；
+> CMake 配置日志应显示
+> `Check for working C compiler: .../prebuilt/linux-aarch64/bin/clang`；
+> 用 clang++ 链接一个 C++ 程序应成功（若报
+> `ld.lld: error: unable to find library -lc++_shared` 则说明兼容别名缺失）。
+>
+> 若保持原包结构不做矫正：`linux-x86_64` 目录（内含 arm64 工具链）不能删。
 
 ### 2.5 项目配置适配（本仓库已内置）
 
@@ -249,7 +286,7 @@ app/build/outputs/apk/debug/
 
 保留（**不要删**）：
 
-- NDK 29 的 `linux-x86_64` 目录（是 arm64 工具链本体，见 2.4 节陷阱说明）
+- NDK 29 的 arm64 工具链目录：矫正后为 `prebuilt/linux-aarch64`（实体）+ `prebuilt/linux-x86_64`（兼容符号链接，**勿删**）；未矫正时为 `prebuilt/linux-x86_64`（实体）。两种状态下都不可删，详见 2.4 节
 - build-tools 34/35/36 的 arm64 替换版
 - Debian 系统包 android-sdk-build-tools（arm64，位于 `/usr/lib/android-sdk`）
 
