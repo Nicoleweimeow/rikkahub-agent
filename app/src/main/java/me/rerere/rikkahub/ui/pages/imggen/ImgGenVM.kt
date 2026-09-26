@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import me.rerere.ai.provider.ImageEditParams
@@ -67,6 +68,17 @@ internal fun selectOrphanedGenMedia(
     imagesDir: File,
 ): List<GenMediaEntity> =
     entities.filter { entity -> !File(imagesDir, entity.path.removePrefix("images/")).exists() }
+
+/**
+ * Makes a model display name safe to use as a single filename component (#39). Model
+ * display names can contain path separators (e.g. an OpenRouter id like
+ * "google/gemini-2.5-flash-image-preview"), which would otherwise make `File(dir, name)`
+ * write into a subdirectory the DB never records.
+ */
+internal fun sanitizeFilenameComponent(name: String): String =
+    name.map { c -> if (c in FILENAME_UNSAFE_CHARS || c.isISOControl()) '_' else c }.joinToString("")
+
+private val FILENAME_UNSAFE_CHARS = charArrayOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
 
 class ImgGenVM(
     context: Application,
@@ -323,7 +335,8 @@ class ImgGenVM(
         index: Int,
     ): File {
         val timestamp = System.currentTimeMillis()
-        val imageFile = File(getApplication<Application>().appTempFolder, "imggen_${timestamp}_${modelName}_$index.png")
+        val safeModelName = sanitizeFilenameComponent(modelName)
+        val imageFile = File(getApplication<Application>().appTempFolder, "imggen_${timestamp}_${safeModelName}_$index.png")
         return filesManager.createImageFileFromBase64(item.data, imageFile.absolutePath)
     }
 
@@ -338,7 +351,7 @@ class ImgGenVM(
         val imagesDir = filesManager.getImagesDir()
 
         val timestamp = System.currentTimeMillis()
-        val filename = "${timestamp}_${modelName}_$index.png"
+        val filename = "${timestamp}_${sanitizeFilenameComponent(modelName)}_$index.png"
         val imageFile = File(imagesDir, filename)
 
         val createdFile = filesManager.createImageFileFromBase64(item.data, imageFile.absolutePath)
@@ -375,6 +388,23 @@ class ImgGenVM(
             }
         }
     }
+
+    suspend fun deleteImages(images: List<GeneratedImage>): List<GeneratedImage> =
+        withContext(Dispatchers.IO) {
+            images.filter { image ->
+                try {
+                    val file = File(image.filePath)
+                    check(!file.exists() || file.delete()) { "Failed to delete image file" }
+                    genMediaRepository.deleteMedia(image.id)
+                    false
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to delete image ${image.id}", e)
+                    true
+                }
+            }
+        }
 
     private fun deleteReferenceFiles(paths: List<String>) {
         viewModelScope.launch {

@@ -58,8 +58,13 @@ class WorkspaceManager(
         root: String,
         path: String = "",
         area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
+        limit: Int? = null,
     ): List<WorkspaceFileEntry> =
-        fileSystem.list(areaDir(root, area), path)
+        if (limit == null) {
+            fileSystem.list(areaDir(root, area), path)
+        } else {
+            fileSystem.list(areaDir(root, area), path, limit)
+        }
 
     fun readText(
         root: String,
@@ -96,6 +101,17 @@ class WorkspaceManager(
         require(file.exists()) { "File does not exist: $path" }
         require(file.isFile) { "Path is not a file: $path" }
         return file.length()
+    }
+
+    fun resolveFile(
+        root: String,
+        path: String,
+        area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
+    ): File {
+        val file = fileSystem.resolve(areaDir(root, area), path)
+        require(file.exists()) { "File does not exist: $path" }
+        require(file.isFile) { "Path is not a file: $path" }
+        return file
     }
 
     fun exportFile(
@@ -199,6 +215,7 @@ class WorkspaceManager(
         cwd: String = "",
         timeoutMillis: Long = DEFAULT_COMMAND_TIMEOUT_MS,
         stdin: ByteArray? = null,
+        shellCompatibilityMode: Boolean = false,
     ): WorkspaceCommandResult {
         require(command.isNotBlank()) { "Command is required" }
         val workingDir = resolveCommandWorkingDir(root, cwd)
@@ -215,6 +232,7 @@ class WorkspaceManager(
                 timeoutMillis = timeoutMillis,
                 stdin = stdin,
                 bindMounts = bindMounts,
+                shellCompatibilityMode = shellCompatibilityMode,
             )
         )
     }

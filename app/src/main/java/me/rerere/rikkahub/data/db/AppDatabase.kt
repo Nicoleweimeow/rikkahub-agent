@@ -64,7 +64,7 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         WorkspaceEntity::class,
         FolderEntity::class,
     ],
-    version = 30,
+    version = 31,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -108,6 +108,11 @@ import me.rerere.rikkahub.workflow.db.WorkflowRunEntity
         // from Room. Nullable-equivalent (empty string default, matching folder_id), so a plain
         // auto-migration suffices.
         AutoMigration(from = 29, to = 30),
+        // v31: the 2.5.1 merge brings upstream's workspace "Shell compatibility mode" flag,
+        // adding a column to WorkspaceEntity. Hand-written as Migration_30_31 (registered in
+        // AppDatabaseFactory) instead of a plain auto-migration: a database restored from an
+        // upstream 2.5.x backup can already carry this column, and an unconditional ADD COLUMN
+        // crash-loops the app on every launch (issue #105).
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
